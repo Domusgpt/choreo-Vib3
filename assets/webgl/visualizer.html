@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VIB3 Visualizer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="visualizer"></canvas>
+
+    <script>
+        const canvas = document.getElementById('visualizer');
+        const ctx = canvas.getContext('2d');
+
+        // Setup canvas size
+        function resize() {
+            canvas.width = window.innerWidth * (window.devicePixelRatio || 1);
+            canvas.height = window.innerHeight * (window.devicePixelRatio || 1);
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // VIB3 Mobile Bridge
+        window.VIB3Mobile = {
+            parameters: {
+                intensity: 1.0,
+                gridDensity: 25,
+                morphFactor: 1.0,
+                chaos: 0.2,
+                speed: 1.0,
+                hue: 180,
+                saturation: 1.0,
+                dimension: 3.5,
+                geometry: 0,
+                rot4dXW: 0,
+                rot4dYW: 0,
+                rot4dZW: 0
+            },
+            audioData: null,
+            time: 0,
+
+            init: function(config) {
+                console.log('VIB3 Mobile initialized:', config);
+                if (config.parameters) {
+                    Object.assign(this.parameters, config.parameters);
+                }
+                this.notifyFlutter('ready', {});
+            },
+
+            updateParameter: function(param, value) {
+                this.parameters[param] = value;
+                console.log(`Parameter ${param} = ${value}`);
+            },
+
+            render: function(audioData) {
+                this.audioData = audioData;
+                this.time += 0.016;
+                this.renderFrame();
+            },
+
+            renderFrame: function() {
+                const w = canvas.width;
+                const h = canvas.height;
+                const p = this.parameters;
+                const t = this.time;
+
+                // Clear
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, w, h);
+
+                // Get audio modulation
+                const bassEnergy = this.audioData?.bands?.bass || 0;
+                const midEnergy = this.audioData?.bands?.mid || 0;
+                const highEnergy = this.audioData?.bands?.high || 0;
+
+                // Draw rotating 4D-projected hypercube (simplified)
+                const centerX = w / 2;
+                const centerY = h / 2;
+                const size = Math.min(w, h) * 0.3 * p.intensity;
+
+                // Rotation based on parameters and audio
+                const rotXW = p.rot4dXW + bassEnergy * 0.5;
+                const rotYW = p.rot4dYW + midEnergy * 0.6;
+                const rotZW = p.rot4dZW + highEnergy * 0.8;
+
+                // Simple 4D cube vertices projected to 2D
+                const points = [];
+                for (let i = 0; i < 16; i++) {
+                    const x = (i & 1) ? 1 : -1;
+                    const y = (i & 2) ? 1 : -1;
+                    const z = (i & 4) ? 1 : -1;
+                    const w = (i & 8) ? 1 : -1;
+
+                    // Apply 4D rotations (simplified)
+                    let rx = x * Math.cos(rotXW) - w * Math.sin(rotXW);
+                    let rw = x * Math.sin(rotXW) + w * Math.cos(rotXW);
+                    let ry = y * Math.cos(rotYW) - rw * Math.sin(rotYW);
+                    rw = y * Math.sin(rotYW) + rw * Math.cos(rotYW);
+                    let rz = z * Math.cos(rotZW) - rw * Math.sin(rotZW);
+
+                    // 4D to 3D projection (perspective from 4D)
+                    const distance = 4;
+                    const scale = distance / (distance - rw);
+
+                    // 3D to 2D projection
+                    const px = centerX + rx * size * scale;
+                    const py = centerY + ry * size * scale;
+
+                    points.push({ x: px, y: py, z: rz, w: rw });
+                }
+
+                // Draw edges with audio-reactive colors
+                const hue = (p.hue + highEnergy * 120) % 360;
+                const sat = Math.min(100, p.saturation * 100 + midEnergy * 30);
+
+                ctx.strokeStyle = `hsl(${hue}, ${sat}%, 50%)`;
+                ctx.lineWidth = 2 + bassEnergy * 3;
+                ctx.lineCap = 'round';
+
+                // Draw hypercube edges (16 vertices, 32 edges)
+                const edges = [
+                    [0,1],[0,2],[0,4],[0,8],
+                    [1,3],[1,5],[1,9],
+                    [2,3],[2,6],[2,10],
+                    [3,7],[3,11],
+                    [4,5],[4,6],[4,12],
+                    [5,7],[5,13],
+                    [6,7],[6,14],
+                    [7,15],
+                    [8,9],[8,10],[8,12],
+                    [9,11],[9,13],
+                    [10,11],[10,14],
+                    [11,15],
+                    [12,13],[12,14],
+                    [13,15],
+                    [14,15]
+                ];
+
+                ctx.beginPath();
+                edges.forEach(([a, b]) => {
+                    ctx.moveTo(points[a].x, points[a].y);
+                    ctx.lineTo(points[b].x, points[b].y);
+                });
+                ctx.stroke();
+
+                // Draw vertices
+                points.forEach(p => {
+                    const brightness = 50 + (p.w + 1) * 25;
+                    ctx.fillStyle = `hsl(${hue}, ${sat}%, ${brightness}%)`;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4 + bassEnergy * 2, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                // Draw chaos particles
+                if (p.chaos > 0.1) {
+                    const particleCount = Math.floor(p.chaos * 50);
+                    for (let i = 0; i < particleCount; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const radius = Math.random() * size * 1.5;
+                        const px = centerX + Math.cos(angle + t) * radius;
+                        const py = centerY + Math.sin(angle + t) * radius;
+
+                        ctx.fillStyle = `hsla(${(hue + i * 10) % 360}, 80%, 60%, ${0.3 + Math.random() * 0.4})`;
+                        ctx.beginPath();
+                        ctx.arc(px, py, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            },
+
+            notifyFlutter: function(event, data) {
+                // Send messages to Flutter via console (Flutter WebView can intercept)
+                if (window.FlutterBridge && window.FlutterBridge.postMessage) {
+                    window.FlutterBridge.postMessage(JSON.stringify({ event, data }));
+                }
+            }
+        };
+
+        // Initialize
+        window.VIB3Mobile.init({});
+
+        // Start render loop
+        function animate() {
+            window.VIB3Mobile.render(window.VIB3Mobile.audioData || {
+                bands: { bass: 0, mid: 0, high: 0 }
+            });
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+        console.log('VIB3 Mobile Visualizer Ready');
+    </script>
+</body>
+</html>
